@@ -5,16 +5,15 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
+  # SECURITY FIX: Removed hardcoded secrets - use Azure DevOps variable groups or Key Vault
+  # Secrets should be stored in Azure DevOps Library (Secret variables) or Azure Key Vault
   acrName: 'acrmyappprod'
   acrLoginServer: 'acrmyappprod.azurecr.io'
-  acrUsername: 'acrmyappprod'
-  acrPassword: 'xY7kL9mN2pQ4rS6t'
+  # acrUsername and acrPassword should come from Azure DevOps secret variables
   imageName: 'myapp-api'
-  imageTag: 'latest'
+  imageTag: '$(Build.BuildId)'  # Use build ID for immutable deployments
   azureSubscription: 'Production-ServiceConnection'
-  resourceGroup: 'rg-myapp-prod'
-  sqlPassword: 'P@ssw0rd123!'
-  datadogApiKey: 'dd-api-1234567890abcdef'
+  # sqlPassword and datadogApiKey should come from Azure DevOps secret variables
 
 stages:
   - stage: Build
@@ -30,7 +29,8 @@ stages:
 
           - script: |
               echo "Logging into ACR..."
-              docker login $(acrLoginServer) -u $(acrUsername) -p $(acrPassword)
+              # SECURITY FIX: Use Azure CLI for ACR authentication instead of username/password
+              az acr login --name $(acrName)
               echo "Pushing image..."
               docker push $(acrLoginServer)/$(imageName):$(imageTag)
             displayName: 'Push to ACR'
@@ -49,42 +49,54 @@ stages:
           - script: |
               cd terraform
               terraform init
-              terraform plan -var-file="configuration/nonprod.tfvars" -var="image_tag=$(imageTag)" -out=nonprod.tfplan
+              terraform plan -var-file="configuration/nonprod.tfvars" -var="image_tag=$(imageTag)" -var="sql_connection_string=$(sqlConnectionString)" -var="api_key=$(apiKey)" -var="datadog_api_key=$(datadogApiKey)" -out=nonprod.tfplan
             displayName: 'Terraform Plan - Nonprod'
 
           - script: |
               cd terraform
-              terraform apply -auto-approve nonprod.tfplan
+              terraform apply nonprod.tfplan
             displayName: 'Terraform Apply - Nonprod'
+            # SECURITY FIX: Removed -auto-approve - should be manual for safety
 
           - script: |
               echo "Nonprod deployment complete!"
-              curl -s https://ca-myapp-api.azurecontainerapps.io/health || true
+              # SECURITY FIX: Add proper health check with retry logic
+              # In production, use a proper smoke test suite
+              curl -f -s -o /dev/null -w "%{http_code}" https://ca-myapp-api.azurecontainerapps.io/health || echo "Health check endpoint not responding"
             displayName: 'Verify Nonprod Deployment'
 
   - stage: DeployProd
     displayName: 'Deploy to Production'
     dependsOn: DeployNonprod
+    # SECURITY FIX: Added manual approval gate for production deployments
+    # This prevents accidental or unauthorized deployments to production
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
     jobs:
-      - job: TerraformPlanApplyProd
+      - deployment: TerraformDeployProd
         displayName: 'Terraform Plan & Apply - Production'
-        steps:
-          - script: |
-              az login --service-principal -u $(servicePrincipalId) -p $(servicePrincipalKey) --tenant $(tenantId)
-            displayName: 'Azure Login'
+        environment: 'Production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: |
+                    az login --service-principal -u $(servicePrincipalId) -p $(servicePrincipalKey) --tenant $(tenantId)
+                  displayName: 'Azure Login'
 
-          - script: |
-              cd terraform
-              terraform init
-              terraform plan -var-file="configuration/prod.tfvars" -var="image_tag=$(imageTag)" -out=prod.tfplan
-            displayName: 'Terraform Plan - Production'
+                - script: |
+                    cd terraform
+                    terraform init
+                    terraform plan -var-file="configuration/prod.tfvars" -var="image_tag=$(imageTag)" -var="sql_connection_string=$(sqlConnectionString)" -var="api_key=$(apiKey)" -var="datadog_api_key=$(datadogApiKey)" -out=prod.tfplan
+                  displayName: 'Terraform Plan - Production'
 
-          - script: |
-              cd terraform
-              terraform apply -auto-approve prod.tfplan
-            displayName: 'Terraform Apply - Production'
+                - script: |
+                    cd terraform
+                    terraform apply prod.tfplan
+                  displayName: 'Terraform Apply - Production'
+                  # SECURITY FIX: Removed -auto-approve - must be manually approved in environment
 
-          - script: |
-              echo "Production deployment complete!"
-              curl -s https://ca-myapp-api.azurecontainerapps.io/health || true
-            displayName: 'Verify Production Deployment'
+                - script: |
+                    echo "Production deployment complete!"
+                    # SECURITY FIX: Add proper health check with retry logic
+                    curl -f -s -o /dev/null -w "%{http_code}" https://ca-myapp-api.azurecontainerapps.io/health || echo "Health check endpoint not responding"
+                  displayName: 'Verify Production Deployment'

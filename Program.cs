@@ -35,7 +35,7 @@ namespace PlatformTest
                 var book = titleResponse.Docs[i];
                 Console.WriteLine();
                 Console.WriteLine($"{i+1}: {book.Title} (ISBN:{book.Key}) | {book.EditionCount} Editions");
-                foreach (var edition in titleResponse.Docs[0].EditionKeys)
+                foreach (var edition in book.EditionKeys)
                 {
                     var editionResponse = await GetEdition(edition);
                     if(editionResponse.NumberOfPages == 0)
@@ -45,10 +45,13 @@ namespace PlatformTest
                     }
                     string editionKey = editionResponse.Key;
                     string editionLanguage = editionResponse.Languages?.FirstOrDefault()?.Key;
+                    // SECURITY FIX: Disable DTD processing to prevent XXE (XML External Entity) attacks
+                    // DtdProcessing.Ignore prevents processing of DOCTYPE declarations
+                    // XmlResolver = null prevents resolution of external entities
                     var readerSettings = new XmlReaderSettings()
                     {
-                        DtdProcessing = DtdProcessing.Parse,
-                        XmlResolver = new XmlUrlResolver(),
+                        DtdProcessing = DtdProcessing.Ignore,
+                        XmlResolver = null,
                     };
                     var encryptedLanguagePrices = File.ReadAllBytes("LanguagePrices_Encrypted");
                     var unencryptedLanguagePrices = Decrypt(encryptedLanguagePrices, password, iv);
