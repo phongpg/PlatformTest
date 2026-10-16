@@ -1,0 +1,5 @@
+environment        = "prod"
+location           = "West US"
+sql_admin_password = "P@ssw0rd123!"
+api_key            = "sk-proj-abc123def456ghi789"
+app_name           = "myapp"

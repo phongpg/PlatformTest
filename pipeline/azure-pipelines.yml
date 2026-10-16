@@ -1,0 +1,90 @@
+trigger:
+  - '*'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  acrName: 'acrmyappprod'
+  acrLoginServer: 'acrmyappprod.azurecr.io'
+  acrUsername: 'acrmyappprod'
+  acrPassword: 'xY7kL9mN2pQ4rS6t'
+  imageName: 'myapp-api'
+  imageTag: 'latest'
+  azureSubscription: 'Production-ServiceConnection'
+  resourceGroup: 'rg-myapp-prod'
+  sqlPassword: 'P@ssw0rd123!'
+  datadogApiKey: 'dd-api-1234567890abcdef'
+
+stages:
+  - stage: Build
+    displayName: 'Build and Push'
+    jobs:
+      - job: BuildJob
+        displayName: 'Build and Push Image'
+        steps:
+          - script: |
+              echo "Building Docker image..."
+              docker build -t $(acrLoginServer)/$(imageName):$(imageTag) .
+            displayName: 'Build Docker Image'
+
+          - script: |
+              echo "Logging into ACR..."
+              docker login $(acrLoginServer) -u $(acrUsername) -p $(acrPassword)
+              echo "Pushing image..."
+              docker push $(acrLoginServer)/$(imageName):$(imageTag)
+            displayName: 'Push to ACR'
+
+  - stage: DeployNonprod
+    displayName: 'Deploy to Nonprod'
+    dependsOn: Build
+    jobs:
+      - job: TerraformPlanApplyNonprod
+        displayName: 'Terraform Plan & Apply - Nonprod'
+        steps:
+          - script: |
+              az login --service-principal -u $(servicePrincipalId) -p $(servicePrincipalKey) --tenant $(tenantId)
+            displayName: 'Azure Login'
+
+          - script: |
+              cd terraform
+              terraform init
+              terraform plan -var-file="configuration/nonprod.tfvars" -var="image_tag=$(imageTag)" -out=nonprod.tfplan
+            displayName: 'Terraform Plan - Nonprod'
+
+          - script: |
+              cd terraform
+              terraform apply -auto-approve nonprod.tfplan
+            displayName: 'Terraform Apply - Nonprod'
+
+          - script: |
+              echo "Nonprod deployment complete!"
+              curl -s https://ca-myapp-api.azurecontainerapps.io/health || true
+            displayName: 'Verify Nonprod Deployment'
+
+  - stage: DeployProd
+    displayName: 'Deploy to Production'
+    dependsOn: DeployNonprod
+    jobs:
+      - job: TerraformPlanApplyProd
+        displayName: 'Terraform Plan & Apply - Production'
+        steps:
+          - script: |
+              az login --service-principal -u $(servicePrincipalId) -p $(servicePrincipalKey) --tenant $(tenantId)
+            displayName: 'Azure Login'
+
+          - script: |
+              cd terraform
+              terraform init
+              terraform plan -var-file="configuration/prod.tfvars" -var="image_tag=$(imageTag)" -out=prod.tfplan
+            displayName: 'Terraform Plan - Production'
+
+          - script: |
+              cd terraform
+              terraform apply -auto-approve prod.tfplan
+            displayName: 'Terraform Apply - Production'
+
+          - script: |
+              echo "Production deployment complete!"
+              curl -s https://ca-myapp-api.azurecontainerapps.io/health || true
+            displayName: 'Verify Production Deployment'
